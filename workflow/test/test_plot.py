@@ -1,11 +1,16 @@
+import os
 import pytest
 import shapely
 from matplotlib import pyplot as plt
 import cartopy.crs
+import numpy.testing as npt
+
+from crs_fixtures import point, point_ak, shift, points, lines, polygons
 
 import workflow.plot
 import workflow.warp
 import workflow.conf
+import pickle
 
 crss = [(None, None),
         (4269, None),
@@ -20,7 +25,24 @@ crss_ak = [(3338, 3338),
            (5070, 3338),
            (4269, 3338)]
 
-show = True
+show = False
+new_gold = False
+fig = plt.figure()
+
+
+import collections
+def default_dict():
+    return collections.defaultdict(default_dict)
+pickle_file_name = os.path.join('workflow','test', 'test_plot_gold.pickle')
+
+if new_gold:
+    gold = default_dict()
+else:
+    import pickle
+    with open(pickle_file_name, 'rb') as fid:
+        gold = pickle.load(fid)
+
+
 
 def point():
     return shapely.geometry.Point(-90, 38)
@@ -65,7 +87,7 @@ def polygons():
     return _polygons    
 
 def run_test(start_p, obj_gen, epsg_data, epsg_ax):
-    ax = workflow.plot.get_ax(workflow.conf.get_crs(epsg_ax))
+    ax = workflow.plot.get_ax(workflow.conf.get_crs(epsg_ax), fig)
     if epsg_ax is not None:
         ax.stock_img()
 
@@ -73,34 +95,51 @@ def run_test(start_p, obj_gen, epsg_data, epsg_ax):
         crs = workflow.conf.get_crs(epsg_data)
         objs = workflow.warp.warp_shapelys(obj_gen(start_p), workflow.conf.latlon_crs(), crs)
     else:
+        epsg_data = 'None'
         crs = None
         objs = obj_gen(start_p)
-    workflow.plot.shply(objs, crs, 'r', ax=ax)
+    res = workflow.plot.shply(objs, crs, 'r', ax=ax)
+
+    if new_gold:
+        if hasattr(res, 'get_paths'):
+            for i,p in enumerate(res.get_paths()):
+                gold[str(start_p)][obj_gen.__name__][epsg_data][i] = p.vertices
+        else:
+            gold[str(start_p)][obj_gen.__name__][epsg_data] = res.get_path().vertices
+            
+        with open(pickle_file_name, 'wb') as fid:
+            pickle.dump(gold, fid)
+    else:
+        if hasattr(res, 'get_paths'):
+            for i,p in enumerate(res.get_paths()):
+                npt.assert_equal(gold[str(start_p)][obj_gen.__name__][epsg_data][i], p.vertices)
+        else:
+            npt.assert_equal(gold[str(start_p)][obj_gen.__name__][epsg_data], res.get_path().vertices)
+
+    if show:
+        plt.show()
+
+    fig.clear()
+
 
 def test_points(points):
     for epsg_data, epsg_ax in crss:
         run_test(point(), points, epsg_data, epsg_ax)
     for epsg_data, epsg_ax in crss_ak:
         run_test(point_ak(), points, epsg_data, epsg_ax)
-    if show:
-        plt.show()
     
 def test_lines(lines):
     for epsg_data, epsg_ax in crss:
         run_test(point(), lines, epsg_data, epsg_ax)
     for epsg_data, epsg_ax in crss_ak:
         run_test(point_ak(), lines, epsg_data, epsg_ax)
-    if show:
-        plt.show()
-
 
 def test_polygons(polygons):
     for epsg_data, epsg_ax in crss:
         run_test(point(), polygons, epsg_data, epsg_ax)
     for epsg_data, epsg_ax in crss_ak:
         run_test(point_ak(), polygons, epsg_data, epsg_ax)
-    if show:
-        plt.show()
+
 
     
 

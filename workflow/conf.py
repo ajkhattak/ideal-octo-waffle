@@ -1,33 +1,33 @@
 """Configuration and global defaults."""
 
 import sys,os
+import subprocess
 import fiona
 
 rcParams = {'packages data dir' : 'packages',
             'epsg' : 5070, # default Albers equal area conic
             'digits' : 7, # roundoff precision
-            'national_map_api_url' : 'https://viewer.nationalmap.gov/tnmaccess/api/products',
             }
 try:
     rcParams['data dir'] = os.path.join(os.environ['ATS_MESHING_DIR'], 'data')
 except KeyError:
     rcParams['data dir'] = os.path.join(os.getcwd(), 'data')
 
-_transforms = dict()
-def get_transform(crs):
+_projections = dict()
+def get_projection(crs):
     """Returns the cartopy transform for the given crs"""
     try:
-        return _transforms[crs['init']]
+        return _projections[crs['init']]
     except KeyError:
         try:
             import cartopy.crs
-            _transforms[crs['init']] = cartopy.crs.epsg(crs['init'][5:])
+            _projections[crs['init']] = cartopy.crs.epsg(crs['init'][5:])
         except ValueError as err:
-            if crs == latlon_crs():
-                _transforms[crs['init']] = cartopy.crs.PlateCarree()
+            if crs['init'] == latlon_crs()['init']:
+                _projections[crs['init']] = cartopy.crs.PlateCarree()
             else:
                 raise err
-        return _transforms[crs['init']]
+        return _projections[crs['init']]
     
 def get_crs(epsg):
     """Returns the fiona coordinate system from epsg number"""
@@ -53,6 +53,11 @@ def set_default_crs(epsg):
 def latlon_crs():
     """Returns the fiona coordinate system for Lat/Lon products."""
     return get_crs(4269)
+
+
+def get_git_revision_hash():
+    """Returns the git revision hash."""
+    return subprocess.check_output(['git', 'rev-parse', 'HEAD']).strip().decode('ascii')
 
 
 

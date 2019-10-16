@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Downloads and meshes HUC based on hydrography data."""
+"""Downloads and plots HUCs, hydrography, and DEM data."""
 
-import os,sys
+import logging
 import numpy as np
 from matplotlib import pyplot as plt
-import shapely
-import logging
 
 import workflow
 import workflow.ui
 import workflow.source_list
 import workflow.bin_utils
-import workflow.hydrography
 
 def get_args():
     # set up parser
     parser = workflow.ui.get_basic_argparse(__doc__+'\n\n'+workflow.source_list.__doc__)
+    workflow.ui.projection(parser)
     workflow.ui.huc_arg(parser)
     workflow.ui.huc_level_arg(parser)
 
@@ -39,44 +37,37 @@ def plot_hucs(args):
     logging.info("")
     logging.info("Plotting level {} HUCs in HUC: {}".format(args.level, args.HUC))
     logging.info("="*30)
-    logging.info('Target projection: "{}"'.format(args.projection['init']))
-    
+    try:
+        logging.info('Target projection: "{}"'.format(args.projection['init']))
+    except TypeError:
+        pass
+        
     # collect data
-    hucs, centroid = workflow.get_split_form_hucs(sources['HUC'], args.HUC, args.level, crs=args.projection)
-    boundary = hucs.exterior()
+    crs, hucs = workflow.get_split_form_hucs(sources['HUC'], args.HUC, args.level, crs=args.projection)
+    args.projection = crs
     
     # hydrography
-    rivers, centroid = workflow.get_rivers_by_bounds(sources['hydrography'], hucs.exterior().bounds, args.projection, args.HUC, centering=False)
-    rivers = workflow.hydrography.filter_rivers_to_huc(hucs, rivers, 10.)
+    _, rivers = workflow.get_reaches(sources['hydrography'], args.HUC, None, crs)
 
     # raster
-    dem_profile, dem = workflow.get_masked_raster_on_shape(sources['DEM'], boundary, args.projection, np.nan)
+    dem_profile, dem = workflow.get_masked_raster_on_shape(sources['DEM'], hucs.exterior(), crs, np.nan)
+    assert(dem_profile['crs'] == crs)
     logging.info('dem crs: {}'.format(dem_profile['crs']))
 
-    return centroid, hucs, rivers, dem, dem_profile
-
+    return hucs, rivers, dem, dem_profile
 
 if __name__ == '__main__':
-    # try:
-        args = get_args()
-        workflow.ui.setup_logging(args.verbosity, args.logfile)
-        centroid, hucs, rivers, dem, profile = plot_hucs(args)
+    args = get_args()
+    workflow.ui.setup_logging(args.verbosity, args.logfile)
+    hucs, rivers, dem, profile = plot_hucs(args)
 
-        if args.title is None:
-            args.title = 'HUC: {}'.format(args.HUC)
+    if args.title is None:
+        args.title = 'HUC: {}'.format(args.HUC)
             
-        fig, ax = workflow.bin_utils.plot_with_dem(args, centroid, hucs, rivers, None, profile, river_color='r')
+    fig, ax = workflow.bin_utils.plot_with_dem(args, hucs, None, dem, profile, river_color='r')
         
-        logging.info("SUCESS")
-        if args.output_filename is not None:
-            fig.savefig(args.output_filename, dpi=150)
-        plt.show()
-
-        sys.exit(0)
-    # except KeyboardInterrupt:
-    #     logging.error("Keyboard Interupt, stopping.")
-    #     sys.exit(0)
-    # except Exception as err:
-    #     logging.error('{}'.format(str(err)))
-    #     sys.exit(1)
+    logging.info("SUCESS")
+    if args.output_filename is not None:
+        fig.savefig(args.output_filename, dpi=150)
+    plt.show()
         
