@@ -5,12 +5,38 @@ import argparse
 import fiona
 
 import workflow.conf
+import workflow.sources.utils
 import workflow.source_list
 
 verb_to_level = {0:logging.WARNING,
                  1:logging.INFO,
                  2:logging.DEBUG,
                  3:logging.DEBUG}
+
+
+#
+# File Validators
+def file_exists(x, type=None):
+    if not os.path.exists(x):
+        if type is None:
+            raise argparse.ArgumentTypeError("Input file '{0}' does not exist".format(x))
+        else:
+            raise argparse.ArgumentTypeError("Input {1} '{0}' does not exist".format(x, type))
+            
+
+def shapefile(x):
+    """Type for argparse - checks that file exists and can be opened by fiona."""
+    file_exists(x, "shapefile")
+    # check now that fiona can open the file.  immediate close to avoid resource issues
+    with fiona.open(x,'r') as fid:
+        pass
+    return x
+
+def vtkfile(x):
+    """Type for vtk - checks that file exists."""
+    file_exists(x, "VTK file")
+    return x
+
 
 def setup_logging(verbosity, logfile=None):
     """Sets the log level and log file."""
@@ -46,6 +72,9 @@ def get_basic_argparse(docstring):
                         help='Increase output verbosity.  (default=1)')
     parser.add_argument('--logfile', type=str,
                         help='Write logging to file instead of stdout')
+    return parser
+
+def projection(parser):
     def valid_epsg(x):
         """Note this validator does the work, no need for more"""
         try:
@@ -54,13 +83,13 @@ def get_basic_argparse(docstring):
             raise argparse.ArgumentTypeError("In parsing EPSG: '%s'"%str(err))
         return epsg
     parser.add_argument('--projection', type=valid_epsg, default=workflow.conf.default_crs(),
-                        help='Output coordinate system.  Default is "{}"'.format(workflow.conf.default_crs()['init']))
+                        help='Output coordinate system.  Default is from rcParams.')
     return parser
 
 
 def valid_hucstr(hucstr):
     try:
-        huc_valid = workflow.huc_str(hucstr)
+        huc_valid = workflow.sources.utils.huc_str(hucstr)
     except RuntimeError as err:
         raise argparse.ArgumentTypeError("In parsing HUC string: '%s'"%str(err))
     else:
@@ -137,8 +166,8 @@ def plot_options(parser):
     group = parser.add_argument_group('Plotting options')
     group.add_argument('--basemap', action='store_true',
                         help='Plot HUCs/shapes with political boundary context via basemap.')
-    group.add_argument('--basemap-resolution', type=str,
-                       help='Map resolution, either "100m" (default), "50m", or "10m"')
+    group.add_argument('--basemap-resolution', type=str, default='50m',
+                       help='Map resolution, either "110m", "50m" (default), or "10m"')
     group.add_argument('--title', type=str, 
                         help='Plot title')
     group.add_argument('--figsize', type=float, nargs=2, 
@@ -177,18 +206,6 @@ def enforce_delaunay(parser):
     
 def inshape_args(parser):
     """Sets input filename shapefile options."""
-    def shapefile(x):
-        """
-        'Type' for argparse - checks that file exists but does not open.
-        """
-        if not os.path.exists(x):
-            raise argparse.ArgumentTypeError("Input shapefile '{0}' does not exist".format(x))
-
-        # check now that fiona can open the file.  immediate close to avoid resource issues
-        with fiona.open(x,'r') as fid:
-            pass
-        return x
-    
     parser.add_argument('input_file',
                         type=shapefile, help='filename including shape to be meshed')
     parser.add_argument('--shape-index', type=int, default=-1,

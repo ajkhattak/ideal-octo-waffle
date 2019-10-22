@@ -52,28 +52,34 @@ class _FileManagerNHD:
             profile = fid.profile
         return profile, hus
         
-    def get_hydro(self, bounds, bounds_crs, huc_hint):
-        """Downloads and reads hydrography within these bounds.
+    def get_hydro(self, huc, bounds=None, bounds_crs=None):
+        """Downloads and reads hydrography within these bounds and/or huc.
 
-        Note this requires a HUC hint of a level 4 HUC which contains bounds.
+        Note this requires a HUC hint of at least a level 4 HUC which contains bounds.
         """
         if 'WBD' in self.name:
             raise RuntimeError('{}: does not provide hydrographic data.'.format(self.name))
         
-        huc_hint = source_utils.huc_str(huc_hint)
-        hint_level = len(huc_hint)
+        huc = source_utils.huc_str(huc)
+        hint_level = len(huc)
 
+        # try to get bounds if not provided
+        if bounds is None:
+            # can we infer a bounds by getting the HUC?
+            profile, hu = self.get_huc(huc)
+            bounds = workflow.utils.bounds(hu)
+            bounds_crs = profile['crs']
+        
         # error checking on the levels, require file_level <= huc_level <= lowest_level
         if hint_level < self.file_level:
             raise ValueError("{}: files are organized at HUC level {}, so cannot ask for a larger HUC than that level.".format(self.name, self.file_level))
         
         # download the file
-        filename = self._download(huc_hint[0:self.file_level])
+        filename = self._download(huc[0:self.file_level])
         logging.info('Using Hydrography file "{}"'.format(filename))
         
-        
         # find and open the hydrography layer        
-        filename = self.name_manager.file_name(huc_hint[0:self.file_level])
+        filename = self.name_manager.file_name(huc[0:self.file_level])
         layer = 'NHDFlowline'
         logging.debug("{}: opening '{}' layer '{}' for streams in '{}'".format(self.name, filename, layer, bounds))
         with fiona.open(filename, mode='r', layer=layer) as fid:
@@ -85,38 +91,55 @@ class _FileManagerNHD:
     def _url(self, hucstr):
         """Use the REST API to find the URL."""
         import requests
-        rest_url = workflow.conf.rcParams['national_map_api_url']
-
+        rest_url = 'https://viewer.nationalmap.gov/tnmaccess/api/products'
         hucstr = hucstr[0:self.file_level]
-        
-        r = requests.get(rest_url, params={'datasets':self.name})#,
-                                           #'polyType':'huc{}'.format(self.file_level),
-                                           #'polyCode':hucstr})
-        r.raise_for_status()
-        json = r.json()
 
-        # this feels hacky, but it does not appear that USGS has their
-        # 'prodFormat' get option or 'format' return json value
-        # working correctly.
-        matches = [m for m in json['items']]
+        def attempt(params):        
+            r = requests.get(rest_url, params=params)
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                logging.error(e)
+                return 1,e
+                
+            json = r.json()
 
-        # filter for GDBs
-        matches = [m for m in matches if 'GDB' in m['downloadURL']]
+            # this feels hacky, but it does not appear that USGS has their
+            # 'prodFormat' get option or 'format' return json value
+            # working correctly.
+            matches = [m for m in json['items']]
 
-        # filter for title contains HUC string
-        matches_f = [m for m in matches if hucstr in m['title'].split()]
-        if len(matches_f) > 0:
-            matches = matches_f
+            # filter for GDBs
+            matches = [m for m in matches if 'downloadURL' in m and 'GDB' in m['downloadURL']]
+
+            # filter for title contains HUC string
+            matches_f = [m for m in matches if hucstr in m['title'].split()]
+            if len(matches_f) > 0:
+                matches = matches_f
         
+            if len(matches) == 0:
+                return 1, '{}: not able to find HUC {}'.format(self.name, hucstr)
+            if len(matches) > 1:
+                logging.error('{}: too many matches for HUC {} ({})'.format(self.name, hucstr, len(matches)))
+                for m in matches:
+                    logging.error(' {}\n   {}'.format(m['title'], m['downloadURL']))
+                return 1, '{}: too many matches for HUC {}'.format(self.name, hucstr)
+            return 0, matches[0]['downloadURL']
+
+        # cheaper if it works, may not work in alaska?
+        a1 = attempt({'datasets':self.name,
+                      'polyType':'huc{}'.format(self.file_level),
+                      'polyCode':hucstr})
+        if not a1[0]:
+            return a1[1]
+
+        # works more univerasally but is a BIG lookup, then filter locally
+        a2 = attempt({'datasets':self.name})
+        if not a2[0]:
+            return a2[1]
+
+        raise ValueError('{}: cannot find HUC {}'.format(self.name, hucstr))
         
-        if len(matches) == 0:
-            raise ValueError('{}: not able to find HUC {}'.format(self.name, hucstr))
-        if len(matches) > 1:
-            logging.error('{}: too many matches for HUC {} ({})'.format(self.name, hucstr, len(matches)))
-            for m in matches:
-                logging.error(' {}\n   {}'.format(m['title'], m['downloadURL']))
-            raise ValueError('{}: too many matches for HUC {}'.format(self.name, hucstr))
-        return matches[0]['downloadURL']
 
     def _download(self, hucstr, force=False):
         """Download the data."""
@@ -151,7 +174,6 @@ class _FileManagerNHD:
 class FileManagerNHDPlus(_FileManagerNHD):
     def __init__(self):
         name = 'National Hydrography Dataset Plus High Resolution (NHDPlus HR)'
-        #name = 'National Hydrography Dataset (NHD) Best Resolution'
         super().__init__(name, 4, 12,
                          workflow.sources.names.Names(name, 'hydrography',
                                                       'NHDPlus_H_{}_GDB',
